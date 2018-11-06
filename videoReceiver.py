@@ -15,7 +15,7 @@ class VideoReceiver:
     number_of_eyes = {}
 
     stop_event = threading.Event()
-    lock = threading.Lock() #for printing and cascadeClasifier.detectMultiScale - throws unspecified error
+    lock = threading.Lock() #for printing and cascadeClasifier.detectMultiScale - throws unspecified error without lock
     face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
     eye_cascade = cv2.CascadeClassifier('haarcascade_eye.xml')
 
@@ -34,7 +34,7 @@ class VideoReceiver:
 
         for url in self.urls:
             self.recv_threads.append(threading.Thread(target=self._startReceive, args=(url, )))
-        
+
         for video_source in self.video_sources:
             self.recv_threads.append(threading.Thread(target=self._startReceiveOPCV, args=(video_source, )))
 
@@ -50,13 +50,15 @@ class VideoReceiver:
         #face and eyes recognition is started from this thread too
         try:
             self.imgs[str(threading.get_ident())] = None
-            
+
             while not self.stop_event.is_set():
                 try:
                     r = requests.get(url, stream=True, timeout=6)
                     break
                 except requests.exceptions.Timeout:
-                    time.sleep(2)
+                    time.sleep(1)
+                except requests.exceptions.ConnectionError:
+                    time.sleep(1)
                 except requests.exceptions.RequestException as e:
                     print(e)
 
@@ -66,10 +68,10 @@ class VideoReceiver:
 
                 with self.lock:
                     print("Started thread that shows img", threading.get_ident())
-                
+
                 with self.lock:
                     print("URL: " + url + " connected, status OK")
-                
+
                 bytesArray = bytes()
 
                 try:
@@ -85,10 +87,10 @@ class VideoReceiver:
                             jpg = bytesArray[a:b+2]
                             bytesArray = bytesArray[b+2:]
                             self.imgs[str(threading.get_ident())] = jpg
-                            
+
                 except requests.exceptions.ConnectionError:
                     print("Thread", threading.get_ident(), "Connection error - stopping, url:", url)
-                
+
                 except KeyboardInterrupt:
                     self.stop_event.set()
         except Exception as err:
@@ -106,7 +108,7 @@ class VideoReceiver:
 
         while not self.stop_event.is_set():
             try:
-                
+
                 img = cv2.imdecode(np.fromstring(self.imgs[str(identificator)], dtype=np.uint8), cv2.IMREAD_COLOR)
 
                 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -123,7 +125,7 @@ class VideoReceiver:
                         eyes = self.eye_cascade.detectMultiScale(roi_gray)
 
                     self.number_of_eyes[str(identificator)] = len(eyes)
-                    for (ex,ey,ew,eh) in eyes: 
+                    for (ex,ey,ew,eh) in eyes:
                         cv2.rectangle(roi_color,(ex,ey),(ex+ew,ey+eh),(0,255,0),2)
 
                 #save proccessed image so it can be shown
@@ -136,23 +138,23 @@ class VideoReceiver:
 
     def showImgs(self):
         """takes all proccessed imgs, joins them and shows final image"""
-        
+
         print("entered showImgs")
         #wait until at least one img is ready
         while len(self.proccessed_images) < 1:
             time.sleep(0.05)
-        
+
         while not self.stop_event.is_set():
             indexes = list(self.proccessed_images)
             img = self.proccessed_images[indexes[0]]
             indexes.pop(0)
-            
+
             #can be joined horizontaly
             if len(self.proccessed_images) <= 3:
                 for index in indexes:
                     img = np.concatenate((img, self.proccessed_images[index]), axis=1)
-            
-            #must be 2x3 
+
+            #must be 2x3
             elif len(self.proccessed_images) == 6:
                 for index in range(2):
                     img = np.concatenate((img, self.proccessed_images[index]), axis=1)
@@ -160,21 +162,21 @@ class VideoReceiver:
                 img2 = self.proccessed_images[2]
                 for index in range(3,6):
                     img2 = np.concatenate((img, self.proccessed_images[index]), axis=1)
-                
+
                 img = np.concatenate((img, img2), axis=0)
-            
+
             #must be 2x2
             elif len(self.proccessed_images) == 4:
                 img = np.concatenate((img, self.proccessed_images[indexes[0]]), axis=1)
                 img2 = np.concatenate((self.proccessed_images[indexes[1]], self.proccessed_images[indexes[2]]), axis=1)
                 img = np.concatenate((img, img2), axis=0)
-            
+
             #count all the eyes
             number_of_eyes = 0
             with self.lock:
                 for value in list(self.number_of_eyes.values()):
                     number_of_eyes += value
-                
+
             #print("Eyes detected:", number_of_eyes)
 
             cv2.imshow("cams", img)
@@ -195,7 +197,7 @@ class VideoReceiver:
             t = threading.Thread(target=self._detectEyes, args=(threading.get_ident(), ))
             t.start()
 
-            
+
             #resolution
             cam.set(3, 640)
             cam.set(4, 480)
