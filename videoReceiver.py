@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 
 class VideoReceiver:
+    """Main class handling connections and detection threads"""
     imgs = {}
     urls = []
     video_sources = []
@@ -15,40 +16,49 @@ class VideoReceiver:
     number_of_eyes = {}
 
     stop_event = threading.Event()
-    lock = threading.Lock() #for printing and cascadeClasifier.detectMultiScale - throws unspecified error without lock
+    # for printing and cascadeClasifier.detectMultiScale - throws unspecified error without lock
+    lock = threading.Lock()
     face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
     eye_cascade = cv2.CascadeClassifier('haarcascade_eye.xml')
 
-    def __init__(self, urls=[], vid_sources=[]):
+    def __init__(self, urls=None, video_sources=None):
+        if urls is None:
+            self.urls = []
         self.urls = urls
-        self.video_sources = vid_sources
+        if video_sources is None:
+            self.video_sources = []
+        self.video_sources = video_sources
 
-    def registerUrl(self, url):
+    def register_url(self, url):
         self.urls.append(url)
 
-    def registerVideoSource(self, video_source):
+    def register_video_source(self, video_source):
         self.video_sources.append(video_source)
 
-    def startThreads(self):
+    def start_threads(self):
         """starts receiving threads for every url and every video source"""
 
         for url in self.urls:
-            self.recv_threads.append(threading.Thread(target=self._startReceive, args=(url, )))
+            self.recv_threads.append(threading.Thread(target=self.start_receive, args=(url, )))
 
         for video_source in self.video_sources:
-            self.recv_threads.append(threading.Thread(target=self._startReceiveOPCV, args=(video_source, )))
+            self.recv_threads.append(threading.Thread(target=self.start_receive_OPCV, args=(video_source, )))
 
         for thread in self.recv_threads:
             thread.start()
 
-    def stopThreads(self):
+    def stop_threads(self):
         self.stop_event.set()
 
-    def _startReceive(self, url):
-        """background thread that handles reading from a SINGLE URL and img saves to imgs dict with key that is threading.get_ident()"""
+    def start_receive(self, url):
+        """
+            background thread that handles reading from a SINGLE URL
+            and img saves to imgs dict with key that is threading.get_ident()
+        """
 
-        #face and eyes recognition is started from this thread too
+        # face and eyes recognition is started from this thread too
         try:
+            r = None
             self.imgs[str(threading.get_ident())] = None
 
             while not self.stop_event.is_set():
@@ -62,8 +72,8 @@ class VideoReceiver:
                 except requests.exceptions.RequestException as e:
                     print(e)
 
-            if r.status_code == 200:
-                t = threading.Thread(target=self._detectEyes, args=(threading.get_ident(), ))
+            if r and r.status_code == 200:
+                t = threading.Thread(target=self.detect_eyes, args=(threading.get_ident(), ))
                 t.start()
 
                 with self.lock:
@@ -72,7 +82,7 @@ class VideoReceiver:
                 with self.lock:
                     print("URL: " + url + " connected, status OK")
 
-                bytesArray = bytes()
+                bytes_array = bytes()
 
                 try:
                     for chunk in r.iter_content(chunk_size=1024):
@@ -80,12 +90,12 @@ class VideoReceiver:
                         if self.stop_event.is_set():
                             break
 
-                        bytesArray += chunk
-                        a = bytesArray.find(b'\xff\xd8')
-                        b = bytesArray.find(b'\xff\xd9')
+                        bytes_array += chunk
+                        a = bytes_array.find(b'\xff\xd8')
+                        b = bytes_array.find(b'\xff\xd9')
                         if a != -1 and b != -1:
-                            jpg = bytesArray[a:b+2]
-                            bytesArray = bytesArray[b+2:]
+                            jpg = bytes_array[a:b+2]
+                            bytes_array = bytes_array[b+2:]
                             self.imgs[str(threading.get_ident())] = jpg
 
                 except requests.exceptions.ConnectionError:
@@ -98,11 +108,11 @@ class VideoReceiver:
 
         print("exiting receive")
 
-    def _detectEyes(self, identificator):
+    def detect_eyes(self, identificator):
         """background thread that does face and eyes recognition"""
 
-        #wait until imgs are saved from _startReceive thread
-        while self.imgs[str(identificator)] == None and not self.stop_event.is_set():
+        #wait until imgs are saved from start_receive thread
+        while self.imgs[str(identificator)] is None and not self.stop_event.is_set():
             time.sleep(0.1)
 
 
@@ -116,8 +126,8 @@ class VideoReceiver:
                 with self.lock:
                     faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
 
-                for (x,y,w,h) in faces:
-                    cv2.rectangle(img,(x,y),(x+w,y+h),(255,0,0),2)
+                for (x, y, w, h) in faces:
+                    cv2.rectangle(img, (x, y), (x + w, y + h), (255, 0, 0), 2)
                     roi_gray = gray[y:y+h, x:x+w]
                     roi_color = img[y:y+h, x:x+w]
 
@@ -125,8 +135,8 @@ class VideoReceiver:
                         eyes = self.eye_cascade.detectMultiScale(roi_gray)
 
                     self.number_of_eyes[str(identificator)] = len(eyes)
-                    for (ex,ey,ew,eh) in eyes:
-                        cv2.rectangle(roi_color,(ex,ey),(ex+ew,ey+eh),(0,255,0),2)
+                    for (ex, ey, ew, eh) in eyes:
+                        cv2.rectangle(roi_color, (ex, ey), (ex+ew, ey+eh), (0, 255, 0), 2)
 
                 #save proccessed image so it can be shown
                 self.proccessed_images[str(identificator)] = img
@@ -136,12 +146,12 @@ class VideoReceiver:
 
         print("exiting detection")
 
-    def showImgs(self):
+    def show_imgs(self):
         """takes all proccessed imgs, joins them and shows final image"""
 
-        print("entered showImgs")
-        #wait until at least one img is ready
-        while len(self.proccessed_images) < 1:
+        print("entered show_imgs")
+        # wait until at least one img is ready
+        while not self.proccessed_images:
             time.sleep(0.05)
 
         while not self.stop_event.is_set():
@@ -160,18 +170,18 @@ class VideoReceiver:
                     img = np.concatenate((img, self.proccessed_images[index]), axis=1)
 
                 img2 = self.proccessed_images[2]
-                for index in range(3,6):
+                for index in range(3, 6):
                     img2 = np.concatenate((img, self.proccessed_images[index]), axis=1)
 
                 img = np.concatenate((img, img2), axis=0)
 
-            #must be 2x2
+            # must be 2x2
             elif len(self.proccessed_images) == 4:
                 img = np.concatenate((img, self.proccessed_images[indexes[0]]), axis=1)
                 img2 = np.concatenate((self.proccessed_images[indexes[1]], self.proccessed_images[indexes[2]]), axis=1)
                 img = np.concatenate((img, img2), axis=0)
 
-            #count all the eyes
+            # count all the eyes
             number_of_eyes = 0
             with self.lock:
                 for value in list(self.number_of_eyes.values()):
@@ -182,33 +192,38 @@ class VideoReceiver:
             cv2.imshow("cams", img)
             cv2.waitKey(50)
 
-        print("Exiting showImgs")
+        print("Exiting show_imgs")
 
-    def _startReceiveOPCV(self, video_source):
-        """background thread that handles reading from a SINGLE VIDEO SOURCE and the img is saved to imgs dict with key that is threading.get_ident()"""
+    def start_receive_OPCV(self, video_source):
+        """
+            background thread that handles reading from a SINGLE VIDEO SOURCE
+            and the img is saved to imgs dict with key that is threading.get_ident()
+        """
 
-        #create VideoCapture instance - open camera
+        # create VideoCapture instance - open camera
         cam = cv2.VideoCapture(video_source)
 
-        #check if camera is opened
+        # check if camera is opened
         if cam.isOpened():
-            #start _detectEyes thread for imgs from this thread
+            # start detect_eyes thread for imgs from this thread
             self.imgs[str(threading.get_ident())] = None
-            t = threading.Thread(target=self._detectEyes, args=(threading.get_ident(), ))
+            t = threading.Thread(target=self.detect_eyes, args=(threading.get_ident(), ))
             t.start()
 
 
-            #resolution
+            # resolution
             cam.set(3, 640)
             cam.set(4, 480)
             #camera warmup
             time.sleep(0.2)
-            #reading the image
+            # reading the image
             while not self.stop_event.is_set():
                 try:
                     ret, img = cam.read()
-                    self.imgs[str(threading.get_ident())] = cv2.imencode('.jpg', img)[1].tobytes() #encode image as jpg so it is same type as the one from _startReceive
-                    time.sleep(0.05) #face eyes detection is not so fast so we can wait a while //THIS SETS FPS to max 20fps
+                    # encode image as jpg = same type as from start_receive
+                    self.imgs[str(threading.get_ident())] = cv2.imencode('.jpg', img)[1].tobytes()
+                    # face eyes detection is not so fast so we can wait a while //THIS SETS FPS to max 20fps
+                    time.sleep(0.05)
                 except KeyboardInterrupt:
                     cam.release()
                     break
@@ -217,10 +232,10 @@ class VideoReceiver:
 
 
 vR = VideoReceiver(["http://192.168.43.1:8080/video", "http://192.168.0.102:8080/video"], [0, 1])
-vR.startThreads()
+vR.start_threads()
 
 try:
-    vR.showImgs()
+    vR.show_imgs()
 except Exception as err:
     print(err)
     vR.stop_event.set()
